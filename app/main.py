@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, status
 from fastapi.security import OAuth2PasswordRequestForm, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -7,6 +7,7 @@ from typing import List
 from fastapi.responses import RedirectResponse
 from . import models, schemas, crud, auth
 from .database import engine, get_db
+from .websocket import document_websocket
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Collaborative Editor API (Secured)")
@@ -18,6 +19,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.websocket("/ws/documents/{document_id}")
+async def document_sync_websocket(websocket: WebSocket, document_id: str):
+    await document_websocket(websocket, document_id)
 
 # python -m uvicorn app.main:app --reload
 

@@ -30,26 +30,31 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+def get_current_user_from_token(token: str, db: Session):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Không thể xác thực thông tin tài khoản",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    token = credentials.credentials
-    is_blacklisted = db.query(models.TokenBlacklist).filter(models.TokenBlacklist.token == token).first()
+    is_blacklisted = db.query(models.TokenBlacklist).filter(
+        models.TokenBlacklist.token == token
+    ).first()
     if is_blacklisted:
-        raise HTTPException(status_code=401, detail="Vui lòng đăng nhập trước khi thực hiện thao tác.")
+        raise credentials_exception
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
+        user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
-    except jwt.PyJWTError:
-        raise credentials_exception
+    except jwt.PyJWTError as exc:
+        raise credentials_exception from exc
 
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if user is None:
         raise credentials_exception
     return user
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    return get_current_user_from_token(credentials.credentials, db)
