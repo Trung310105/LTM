@@ -49,3 +49,22 @@ class DocumentConnectionManager:
 
         for client in failed:
             await self.disconnect(document_id, client)
+
+    async def broadcast_text(
+        self,
+        document_id: str,
+        payload: str,
+        sender: WebSocket,
+    ) -> None:
+        clients = await self.clients(document_id)
+        failed: list[WebSocket] = []
+        for client in clients:
+            if client is sender:
+                continue
+            try:
+                await client.send_text(payload)
+            except (WebSocketDisconnect, RuntimeError, OSError):
+                failed.append(client)
+
+        for client in failed:
+            await self.disconnect(document_id, client)

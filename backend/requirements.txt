@@ -4,4 +4,4 @@ sqlalchemy
 bcrypt
 PyJWT
 python-multipart
-y-py==0.6.2
+y_py

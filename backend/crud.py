@@ -3,8 +3,8 @@ from datetime import datetime
 from . import models, schemas
 
 
-def create_document(db: Session, doc: schemas.DocumentCreate):
-    db_doc = models.Document(title=doc.title, owner_id=doc.owner_id)
+def create_document(db: Session, doc: schemas.DocumentCreate, owner_id: str):
+    db_doc = models.Document(title=doc.title, owner_id=owner_id)
     db.add(db_doc)
     db.commit()
     db.refresh(db_doc)
@@ -16,6 +16,23 @@ def get_all_documents(db: Session):
 
 def get_document(db: Session, document_id: str):
     return db.query(models.Document).filter(models.Document.id == document_id).first()
+
+
+def get_document_access_role(document: models.Document, user_id: str):
+    if document.owner_id == user_id:
+        return "editor"
+
+    collaborator = next(
+        (share for share in document.collaborators if share.user_id == user_id),
+        None,
+    )
+    if collaborator:
+        return collaborator.role
+
+    if document.visibility == "public":
+        return document.public_role or "viewer"
+
+    return None
 
 
 def update_document(db: Session, document_id: str, doc_update: schemas.DocumentUpdate):
@@ -118,6 +135,16 @@ def share_document(db: Session, document_id: str, target_user_id: str, role: str
     db.commit()
     db.refresh(new_share)
     return new_share
+
+
+def get_document_shares(db: Session, document_id: str):
+    shares = (
+        db.query(models.DocumentShare, models.User.username)
+        .join(models.User, models.User.id == models.DocumentShare.user_id)
+        .filter(models.DocumentShare.document_id == document_id)
+        .all()
+    )
+    return [{"username": username, "role": share.role} for share, username in shares]
 
 
 def update_document_visibility(db: Session, document_id: str, visibility_data: schemas.DocumentVisibilityUpdate):

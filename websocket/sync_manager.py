@@ -3,10 +3,9 @@ from dataclasses import dataclass
 
 from y_py import YDoc, apply_update, encode_state_as_update
 
-from . import models
-from .database import SessionLocal
+from backend import models
+from backend.database import SessionLocal
 from .realtime_persistence import (
-    document_content_from_ytext,
     get_saved_state,
     save_state,
 )
@@ -64,11 +63,10 @@ class YjsDocumentStore:
         async with state.lock:
             apply_update(state.document, update)
             snapshot = bytes(encode_state_as_update(state.document))
-            content = document_content_from_ytext(state.document.get_text("content"))
 
             db = SessionLocal()
             try:
-                save_state(db, document_id, snapshot, content)
+                save_state(db, document_id, snapshot)
             finally:
                 db.close()
 

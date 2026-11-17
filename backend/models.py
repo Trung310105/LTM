@@ -18,7 +18,7 @@ class Document(Base):
     __tablename__ = "documents"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String, nullable=False)
-    content = Column(Text, default="")
+    content = Column(Text, default="")  # HTML snapshot; the collaborative structure is stored in yjs_state.
     owner_id = Column(String, ForeignKey("users.id"))
     visibility = Column(String, default="private")
     public_role = Column(String, default=None)

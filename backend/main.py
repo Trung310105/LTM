@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, status
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -7,25 +7,11 @@ from typing import List
 from fastapi.responses import RedirectResponse
 from . import models, schemas, crud, auth
 from .database import engine, get_db
-from .websocket import document_websocket
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Collaborative Editor API (Secured)")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.websocket("/ws/documents/{document_id}")
-async def document_sync_websocket(websocket: WebSocket, document_id: str):
-    await document_websocket(websocket, document_id)
-
-# python -m uvicorn app.main:app --reload
+# Run with: python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 @app.get("/", tags=["Root"])
 def read_root():
@@ -71,23 +57,14 @@ def logout(credentials: HTTPAuthorizationCredentials = Depends(auth.security), d
 
 
 def check_document_access(db_doc, user_id: str, required_role: str = "viewer"):
-    if db_doc.owner_id == user_id:
-        return True
-    if db_doc.visibility == "public":
-        if required_role == "viewer": return True
-        if required_role == "editor" and db_doc.public_role == "editor": return True
-    for collaborator in db_doc.collaborators:
-        if collaborator.user_id == user_id:
-            if required_role == "viewer": return True
-            if required_role == "editor" and collaborator.role == "editor": return True
-    return False
+    role = crud.get_document_access_role(db_doc, user_id)
+    return role == "editor" or (required_role == "viewer" and role == "viewer")
 
 
 @app.post("/api/documents/", response_model=schemas.DocumentResponse, tags=["Documents"])
 def create_new_document(doc: schemas.DocumentCreate, db: Session = Depends(get_db),
                         current_user: models.User = Depends(auth.get_current_user)):
-    doc.owner_id = current_user.id
-    return crud.create_document(db=db, doc=doc)
+    return crud.create_document(db=db, doc=doc, owner_id=current_user.id)
 
 
 @app.get("/api/documents/", response_model=schemas.UserDocumentsResponse, tags=["Documents"])
@@ -102,7 +79,9 @@ def open_document(document_id: str, db: Session = Depends(get_db),
     if not db_doc: raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu")
     if not check_document_access(db_doc, current_user.id, "viewer"):
         raise HTTPException(status_code=403, detail="Bạn không có quyền xem tài liệu này")
-    return db_doc
+    response = schemas.DocumentResponse.model_validate(db_doc)
+    response.access_role = crud.get_document_access_role(db_doc, current_user.id)
+    return response
 
 
 @app.put("/api/documents/{document_id}", response_model=schemas.DocumentResponse, tags=["Documents"])
@@ -126,7 +105,8 @@ def delete_document(document_id: str, db: Session = Depends(get_db),
     return None
 
 
-@app.post("/api/documents/{document_id}/share", tags=["Documents"])
+@app.post("/api/documents/{document_id}/share",
+          response_model=schemas.DocumentShareResponse, tags=["Documents"])
 def share_document(document_id: str, share_data: schemas.ShareCreate, db: Session = Depends(get_db),
                    current_user: models.User = Depends(auth.get_current_user)):
     db_doc = crud.get_document(db, document_id=document_id)
@@ -142,7 +122,25 @@ def share_document(document_id: str, share_data: schemas.ShareCreate, db: Sessio
     if target_user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Bạn không thể tự chia sẻ cho chính mình")
 
-    return crud.share_document(db=db, document_id=document_id, target_user_id=target_user.id, role=share_data.role)
+    shared = crud.share_document(
+        db=db,
+        document_id=document_id,
+        target_user_id=target_user.id,
+        role=share_data.role,
+    )
+    return {"username": target_user.username, "role": shared.role}
+
+
+@app.get("/api/documents/{document_id}/shares",
+         response_model=List[schemas.DocumentShareResponse], tags=["Documents"])
+def get_document_shares(document_id: str, db: Session = Depends(get_db),
+                        current_user: models.User = Depends(auth.get_current_user)):
+    db_doc = crud.get_document(db, document_id=document_id)
+    if not db_doc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu")
+    if db_doc.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Chỉ chủ sở hữu mới có quyền xem danh sách chia sẻ")
+    return crud.get_document_shares(db, document_id)
 
 
 @app.post("/api/documents/{document_id}/versions", response_model=schemas.DocumentVersionResponse,
@@ -204,3 +202,12 @@ def change_document_visibility(document_id: str, visibility_data: schemas.Docume
         raise HTTPException(status_code=400, detail="Vui lòng xác định quyền (viewer/editor) khi bật chế độ Public")
 
     return crud.update_document_visibility(db, document_id=document_id, visibility_data=visibility_data)
+
+
+app = CORSMiddleware(
+    app=app,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

@@ -11,6 +11,9 @@ class DocumentResponse(BaseModel):
     title: str
     content: str
     owner_id: Optional[str] = None
+    visibility: Optional[str] = "private"
+    public_role: Optional[str] = None
+    access_role: Optional[Literal["viewer", "editor"]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -62,3 +65,8 @@ class Token(BaseModel):
 class ShareCreate(BaseModel):
     username: str
     role: Literal["editor", "viewer"] = "viewer"
+
+
+class DocumentShareResponse(BaseModel):
+    username: str
+    role: Literal["editor", "viewer"]

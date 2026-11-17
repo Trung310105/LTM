@@ -1,12 +1,13 @@
+import json
 from typing import Optional
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from . import auth, crud, models
+from backend import auth, crud
 from .connection_manager import DocumentConnectionManager
-from .database import SessionLocal
+from backend.database import SessionLocal
 from .sync_manager import YjsDocumentStore
 
 
@@ -14,33 +15,30 @@ connection_manager = DocumentConnectionManager()
 document_store = YjsDocumentStore()
 
 
-def _has_access(document: models.Document, user_id: str) -> bool:
-    if document.owner_id == user_id or document.visibility == "public":
-        return True
-    return any(collaborator.user_id == user_id for collaborator in document.collaborators)
-
-
-def _authorize(document_id: str, token: Optional[str]) -> bool:
+def _authorize(document_id: str, token: Optional[str]) -> Optional[bool]:
+    if not token:
+        return None
     db: Session = SessionLocal()
     try:
         document = crud.get_document(db, document_id)
         if document is None:
-            return False
-        if token is None:
-            return True
+            return None
         try:
             user = auth.get_current_user_from_token(token, db)
-        except Exception:
-            return False
-        return _has_access(document, user.id)
+        except HTTPException:
+            return None
+        role = crud.get_document_access_role(document, user.id)
+        if role is None:
+            return None
+        return role == "editor"
     finally:
         db.close()
 
 
 async def document_websocket(websocket: WebSocket, document_id: str) -> None:
     token = websocket.query_params.get("token")
-    valid = await run_in_threadpool(_authorize, document_id, token)
-    if not valid:
+    can_edit = await run_in_threadpool(_authorize, document_id, token)
+    if can_edit is None:
         await websocket.close(code=1008, reason="Invalid document or access denied")
         return
 
@@ -54,6 +52,12 @@ async def document_websocket(websocket: WebSocket, document_id: str) -> None:
                 update = message["bytes"]
                 if not update:
                     continue
+                latest_permission = await run_in_threadpool(
+                    _authorize, document_id, token
+                )
+                if latest_permission is not True:
+                    await websocket.close(code=1008, reason="Read-only access")
+                    return
                 try:
                     await document_store.apply_and_persist(document_id, update)
                 except (ValueError, RuntimeError):
@@ -65,6 +69,17 @@ async def document_websocket(websocket: WebSocket, document_id: str) -> None:
             elif message.get("text") is not None:
                 if message["text"] == "ping":
                     await websocket.send_text("pong")
+                    continue
+                try:
+                    payload = json.loads(message["text"])
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("type") in {"awareness", "awareness-request"}:
+                    await connection_manager.broadcast_text(
+                        document_id, message["text"], websocket
+                    )
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
